@@ -1,0 +1,77 @@
+#!/bin/bash
+# Purpose: Create a usable Subversion authz file (governs permissions on a per-repository basis and optionally at the folder or
+#          file level).
+#          For Linux-based Subversion servers using Apache LDAP authentication and sssd from an external LDAP-accessible auth source.
+#
+# Prerequisites:
+# 1. Apache is set up and configured for Subversion via mod_dav_svn, with config file under /etc/httpd/conf.d (see subversion.conf
+#    which is version controlled in the same Subversion folder as this script).
+# 2. Apache mod_ldap is configured as the source for authentication to Subversion.
+# 3. The authentication server has an overall user group defined holding all users that need access to Subversion (R/W is default)
+# 4. Any non-default repository permissions can be set by populating groups having the repository name in them
+#    -- see reposrwgrp and reposnagrp functions below for the naming pattern.
+#    a. Members of the RW group will be the only ones with RW access (others have no access by default unless the no-access user
+#       group is populated). Default membership of this group, if empty, will be assumed to be the main SVN access group.
+#    b. Members of the NA group will be the only ones who have no access (members must not also be in the RW group for this to have
+#       effect).
+# 5. selinux setup if this is being used:
+#    a. setsebool httpd_can_connect_ldap on  # allows authentication via LDAP
+#    b. setsebool -P httpd_unified 1         # allows hook scripts to be executed
+
+bombout() {
+  echo "ERROR: $1." 1>&2
+  rm -f $AUTHZTMP1 $AUTHZTMP2
+  exit 1
+}
+
+# Naming convention for group that gives Read-Write access
+reposrwgrp() {
+  echo "Subversion - RW - $1"
+}
+# Naming convention for group that removes Read Only access, leaving No Access, unless user also in RW group or the RW group has no members
+reposnagrp() {
+  echo "Subversion - NA - $1"
+}
+
+APACHECONFD=/etc/httpd/conf.d
+[ ! -d $APACHECONFD ] && bombout "No Apache config folder '$APACHECONFD' found"
+
+AUTHZ=$(grep -hr "^ *AuthzSVNAccessFile" /etc/httpd/conf.d | awk '{print $2}' | sort | head -n 1)
+SVNBASE=$(grep -hr "^ *SVNParentPath" /etc/httpd/conf.d | awk '{print $2}' | sort | head -n 1)
+[ -z "$SVNBASE" ] && bombout "No Subversion base found in Apache configs"
+
+AUTHZTMP1=$(mktemp --suffix=.authz)
+AUTHZTMP2=$(mktemp --suffix=.authz)
+SVNGRP="SubversionUsers"
+
+[ -n "$DEBUG" ] && echo "AUTHZ='$AUTHZ'" 1>&2
+[ -n "$DEBUG" ] && echo "SVNBASE='$SVNBASE'" 1>&2
+
+echo "[groups]" >> $AUTHZTMP1
+SVNGRPMEM=$(getent group "$SVNGRP" | cut -d: -f4)
+[ -z "$SVNGRPMEM" ] && bombout "No $SVNGRP group members retrieved; something is wrong"
+echo "$SVNGRP = $SVNGRPMEM" >> $AUTHZTMP1
+REPOSLIST=$(ls -ln $SVNBASE | grep ^d | awk '{print $9}')
+[ -z "$REPOSLIST" ] && bombout "No Subversion repositories found under $SVNBASE folder"
+for REPOS in $REPOSLIST; do
+  echo "[$REPOS:/]" >> $AUTHZTMP2
+  ADGRP=$(reposrwgrp $REPOS)
+  ADGRPMEM=$(getent group "$ADGRP" | cut -d: -f4)
+  [ -z "$ADGRPMEM" ] && ADGRPMEM="@$SVNGRP"
+  echo "$ADGRP = $ADGRPMEM" >> $AUTHZTMP1
+  echo "@$ADGRP = rw" >> $AUTHZTMP2
+  ADGRP=$(reposnagrp $REPOS)
+  ADGRPMEM=$(getent group "$ADGRP" | cut -d: -f4)
+  [ -z "$ADGRPMEM" ] && ADGRPMEM="@$SVNGRP"
+  echo "$ADGRP = $ADGRPMEM" >> $AUTHZTMP1
+  echo "@$ADGRP =" >> $AUTHZTMP2
+done
+
+echo "
+[/]
+* = r
+@$SVNGRP = r
+" >> $AUTHZTMP1
+
+cat $AUTHZTMP1 $AUTHZTMP2
+rm -f $AUTHZTMP1 $AUTHZTMP2
