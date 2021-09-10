@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # Purpose: Create a usable Subversion authz file (governs permissions on a per-repository basis and optionally at the folder or
 #          file level).
 #          For Linux-based Subversion servers using Apache LDAP authentication and sssd from an external LDAP-accessible auth source.
