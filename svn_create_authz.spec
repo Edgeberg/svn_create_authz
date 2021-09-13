@@ -1,6 +1,6 @@
 Name:    svn_create_authz
 Version: 1
-Release: 1%{?dist}
+Release: 2%{?dist}
 BuildArch: noarch
 Summary: Create a Subversion authz file with group-based access from LDAP information
 
